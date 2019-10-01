@@ -6,61 +6,94 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 from IPython import display
+import pathlib
 
 from tensorflow.keras import layers
 
-BUFFER_SIZE = 60000
-BATCH_SIZE = 256
+BUFFER_SIZE = 8144
+BATCH_SIZE = 1024
 EPOCHS = 256
 
-train_images = []
-for img in glob.glob("cars_train/*.jpg"):
-    train_images.append(cv2.imread(img, 0))
+data_dir1 = tf.keras.utils.get_file(
+    origin='http://imagenet.stanford.edu/internal/car196/cars_train.tgz', fname='cars_train', untar=True)
+data_dir1 = pathlib.Path(data_dir1)
 
-train_images = np.array(train_images)
-print(train_images.shape)
-train_images = train_images.reshape(
-    train_images.shape[0], 96, 128, 1).astype('float32')
-train_images = (train_images - 127.5) / 127.5
-train_dataset = tf.data.Dataset.from_tensor_slices(
-    train_images).shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
+data_dir2 = tf.keras.utils.get_file(
+    origin='http://imagenet.stanford.edu/internal/car196/cars_test.tgz', fname='cars_test', untar=True)
+data_dir2 = pathlib.Path(data_dir2)
+
+list_ds1 = tf.data.Dataset.list_files(str(data_dir1/'*.jpg'))
+list_ds2 = tf.data.Dataset.list_files(str(data_dir2/'*.jpg'))
+
+list_ds = list_ds1.concatenate(list_ds2)
+
+
+def decode_img(img):
+    img = tf.image.decode_jpeg(img, channels=1)
+    img = tf.image.convert_image_dtype(img, tf.float32)
+    img = (img - 0.5) * 2
+
+    desired_width = 128
+    desired_height = 96
+
+    img = tf.image.resize_with_pad(img, desired_height, desired_width)
+
+    return img
+
+
+def process_path(file_path):
+    img = tf.io.read_file(file_path)
+    img = decode_img(img)
+    return img
+
+
+train_images = list_ds.map(
+    process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+train_images = train_images.shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
+
+f, ax = plt.subplots(4, 4)
+for i, img in enumerate(train_images.take(16)):
+    ax[i // 4][i % 4].imshow(img.numpy()[0, :, :, 0])
+    ax[i // 4][i % 4].axis('off')
+plt.show()
 
 
 def make_generator_model():
     model = tf.keras.Sequential()
-    model.add(layers.Dense(6 * 8 * 256, use_bias=False, input_shape=(100,)))
+    model.add(layers.Dense(6 * 8 * 1024, use_bias=False, input_shape=(512,)))
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
-    model.add(layers.Reshape((6, 8, 256)))
-    assert model.output_shape == (None, 6, 8, 256)
+    model.add(layers.Reshape((6, 8, 1024)))
+    assert model.output_shape == (None, 6, 8, 1024)
 
     model.add(layers.Conv2DTranspose(
-        128, (5, 5), strides=(1, 1), padding='same', use_bias=False))
-    assert model.output_shape == (None, 6, 8, 128)
+        512, (5, 5), strides=(1, 1), padding='same', use_bias=False))
+    assert model.output_shape == (None, 6, 8, 512)
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU())
+
+    model.add(layers.Conv2DTranspose(
+        256, (5, 5), strides=(2, 2), padding='same', use_bias=False))
+    assert model.output_shape == (None, 12, 16, 256)
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU())
+
+    model.add(layers.Conv2DTranspose(
+        128, (5, 5), strides=(2, 2), padding='same', use_bias=False))
+    assert model.output_shape == (None, 24, 32, 128)
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
     model.add(layers.Conv2DTranspose(
         64, (5, 5), strides=(2, 2), padding='same', use_bias=False))
-    assert model.output_shape == (None, 12, 16, 64)
-    model.add(layers.BatchNormalization())
-    model.add(layers.LeakyReLU())
-
-    model.add(layers.Conv2DTranspose(
-        32, (5, 5), strides=(2, 2), padding='same', use_bias=False))
-    assert model.output_shape == (None, 24, 32, 32)
-    model.add(layers.BatchNormalization())
-    model.add(layers.LeakyReLU())
-
-    model.add(layers.Conv2DTranspose(
-        16, (5, 5), strides=(2, 2), padding='same', use_bias=False))
-    assert model.output_shape == (None, 48, 64, 16)
+    assert model.output_shape == (None, 48, 64, 64)
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
     model.add(layers.Conv2DTranspose(1, (5, 5), strides=(2, 2),
-                                     padding='same', use_bias=False, activation='tanh'))
+                                     padding='same', use_bias=False,
+                                     activation='tanh'))
     assert model.output_shape == (None, 96, 128, 1)
 
     return model
@@ -75,6 +108,14 @@ def make_discriminator_model():
     model.add(layers.Dropout(0.3))
 
     model.add(layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same'))
+    model.add(layers.LeakyReLU())
+    model.add(layers.Dropout(0.3))
+
+    model.add(layers.Conv2D(256, (5, 5), strides=(2, 2), padding='same'))
+    model.add(layers.LeakyReLU())
+    model.add(layers.Dropout(0.3))
+
+    model.add(layers.Conv2D(512, (5, 5), strides=(2, 2), padding='same'))
     model.add(layers.LeakyReLU())
     model.add(layers.Dropout(0.3))
 
@@ -104,7 +145,7 @@ discriminator = make_discriminator_model()
 generator_optimizer = tf.keras.optimizers.Adam(1e-4)
 discriminator_optimizer = tf.keras.optimizers.Adam(1e-4)
 
-noise_dim = 100
+noise_dim = 512
 num_examples_to_generate = 16
 
 seed = tf.random.normal([num_examples_to_generate, noise_dim])
@@ -171,4 +212,4 @@ def generate_and_save_images(model, epoch, test_input):
     # plt.show()
 
 
-train(train_dataset, EPOCHS)
+train(train_images, EPOCHS)
