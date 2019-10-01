@@ -10,7 +10,7 @@ import pathlib
 
 from tensorflow.keras import layers
 
-BUFFER_SIZE = 8144
+BUFFER_SIZE = 16187
 BATCH_SIZE = 1024
 EPOCHS = 256
 
