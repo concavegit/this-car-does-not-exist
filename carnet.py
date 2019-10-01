@@ -51,13 +51,6 @@ train_images = list_ds.map(
     process_path, num_parallel_calls=tf.data.experimental.AUTOTUNE)
 train_images = train_images.shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
 
-f, ax = plt.subplots(4, 4)
-for i, img in enumerate(train_images.take(16)):
-    ax[i // 4][i % 4].imshow(img.numpy()[0, :, :, 0])
-    ax[i // 4][i % 4].axis('off')
-plt.show()
-
-
 def make_generator_model():
     model = tf.keras.Sequential()
     model.add(layers.Dense(6 * 8 * 1024, use_bias=False, input_shape=(512,)))
