@@ -1,25 +1,23 @@
 import pathlib
+import datetime
 import os
-import time
 import tensorflow as tf
-import numpy as np
 import matplotlib.pyplot as plt
 from tensorflow.keras import layers
-from IPython import display
 
 gpus = tf.config.experimental.list_physical_devices('GPU')
 
 # Allocate GPU memory sparingly to avoid memory issues.
 # This if statement can be removed for better graphics cards than my
 # GeForce 930MX
-if gpus:
-    try:
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-        logical_gpus = tf.config.experimental.list_logical_devices('GPU')
-        print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
-    except RuntimeError as e:
-        print(e)
+# if gpus:
+#     try:
+#         for gpu in gpus:
+#             tf.config.experimental.set_memory_growth(gpu, True)
+#         logical_gpus = tf.config.experimental.list_logical_devices('GPU')
+#         print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
+#     except RuntimeError as e:
+#         print(e)
 
 BUFFER_SIZE = 16187
 BATCH_SIZE = 32
@@ -65,32 +63,37 @@ train_images = train_images.shuffle(BUFFER_SIZE).batch(BATCH_SIZE)
 
 def make_generator_model():
     model = tf.keras.Sequential()
-    model.add(layers.Dense(4*4*1024, use_bias=False, input_shape=(100,)))
+    model.add(layers.Dense(4*4*1024, input_shape=(100,)))
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
     model.add(layers.Reshape((4, 4, 1024)))
     assert model.output_shape == (None, 4, 4, 1024)
 
     model.add(layers.Conv2DTranspose(
-        512, (5, 5), strides=(2, 2), padding="same", use_bias=False))
+        512, (5, 5), strides=(2, 2), padding="same"))
     assert model.output_shape == (None, 8, 8, 512)
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
     model.add(layers.Conv2DTranspose(
-        256, (5, 5), strides=(2, 2), padding="same", use_bias=False))
+        256, (5, 5), strides=(2, 2), padding="same"))
     assert model.output_shape == (None, 16, 16, 256)
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
     model.add(layers.Conv2DTranspose(
-        128, (5, 5), strides=(2, 2), padding="same", use_bias=False))
+        128, (5, 5), strides=(2, 2), padding='same'))
     assert model.output_shape == (None, 32, 32, 128)
     model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
 
-    model.add(layers.Conv2DTranspose(3, (5, 5), strides=(2, 2),
-                                     padding="same", use_bias=False, activation='tanh'))
+    model.add(layers.Conv2DTranspose(128, (5, 5), strides=(2, 2),
+                                     padding='same'))
+    assert model.output_shape == (None, 64, 64, 128)
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU())
+
+    model.add(layers.Conv2D(3, (5, 5), activation='tanh', padding='same'))
     assert model.output_shape == (None, 64, 64, 3)
 
     return model
@@ -100,10 +103,22 @@ def make_discriminator_model():
     model = tf.keras.Sequential()
     model.add(layers.Conv2D(64, (5, 5), strides=(2, 2),
                             padding='same', input_shape=[64, 64, 3]))
+    model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
     model.add(layers.Dropout(0.3))
 
     model.add(layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same'))
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU())
+    model.add(layers.Dropout(0.3))
+
+    model.add(layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same'))
+    model.add(layers.BatchNormalization())
+    model.add(layers.LeakyReLU())
+    model.add(layers.Dropout(0.3))
+
+    model.add(layers.Conv2D(128, (5, 5), strides=(2, 2), padding='same'))
+    model.add(layers.BatchNormalization())
     model.add(layers.LeakyReLU())
     model.add(layers.Dropout(0.3))
 
@@ -182,14 +197,14 @@ def train_step(images):
     return gen_loss, disc_loss, tf.norm(gradients_of_generator[-1]), tf.norm(gradients_of_discriminator[-1]), tf.norm(gradients_of_generator[0]), tf.norm(gradients_of_discriminator[0])
 
 
-summary_writer = tf.summary.create_file_writer('tensorboard')
+current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+log_dir = 'log/' + current_time
+summary_writer = tf.summary.create_file_writer(log_dir)
 
 
 def train(dataset, epochs):
     minibatch = 0
     for epoch in range(epochs):
-        start = time.time()
-
         for image_batch in dataset:
             losses = (train_step(image_batch))
             with summary_writer.as_default():
@@ -206,16 +221,14 @@ def train(dataset, epochs):
                                   losses[5], step=minibatch)
             minibatch += 1
 
-        display.clear_output(wait=True)
-        generate_and_save_images(generator, epoch + 1, seed)
+        predictions = generate_and_save_images(generator, epoch + 1, seed)
+        with summary_writer.as_default():
+            tf.summary.image(
+                'Generated images from epoch {}'.format(epoch + 1), predictions, step=epoch+1, max_outputs=16)
 
-        if (epoch + 1) % 15 == 0:
+        if epoch % 16 == 0 and epoch != 0:
             checkpoint.save(file_prefix=checkpoint_prefix)
 
-        print('Time for epoch {} is {} sec'.format(
-            epoch + 1, time.time() - start))
-
-    display.clear_output(wait=True)
     generate_and_save_images(generator, epochs, seed)
 
 
@@ -226,8 +239,10 @@ def generate_and_save_images(model, epoch, test_input):
         plt.subplot(4, 4, i+1)
         plt.imshow(predictions[i])
         plt.axis('off')
-    fig.savefig('image_at_epoch{:04d}.png'.format(epoch))
-    # plt.show()
+    fig.savefig(log_dir + '/image_at_epoch{:04d}.png'.format(epoch))
+    return predictions
 
 
-train(train_images, EPOCHS)
+manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, 3)
+checkpoint.restore(manager.latest_checkpoint)
+train(train_images, 1024)
