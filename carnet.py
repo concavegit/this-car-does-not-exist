@@ -243,6 +243,4 @@ def generate_and_save_images(model, epoch, test_input):
     return predictions
 
 
-manager = tf.train.CheckpointManager(checkpoint, checkpoint_dir, 3)
-checkpoint.restore(manager.latest_checkpoint)
-train(train_images, 1024)
+train(train_images, 128)
